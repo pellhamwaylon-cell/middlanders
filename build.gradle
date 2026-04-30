@@ -1,0 +1,21 @@
+plugins {
+    id 'java'
+    id 'org.teavm' version '0.10.1'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.teavm:teavm-classlib:0.10.1'
+    implementation 'org.teavm:teavm-jso:0.10.1'
+}
+
+teavm {
+    js {
+        mainClass = 'com.middlanders.core.Main'
+        outputDir = file('build/teavm')
+        mainJSName = 'classes.js'
+    }
+}

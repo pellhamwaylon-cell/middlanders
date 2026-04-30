@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html style="background:#000; height:100%;">
+<head>
+    <meta charset="UTF-8"><title>Middlanders 1.21.1 | Engine Stable</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+        body { margin:0; overflow:hidden; font-family:'VT323', monospace; color:white; user-select:none; }
+        
+        .mc-dirt { 
+            background:#3e2d1d; 
+            background-image:url('https://minecraft.wiki/images/Dirt_Path_JE2_BE2.png'); 
+            background-size:64px; 
+            image-rendering:pixelated; 
+            background-blend-mode:multiply; 
+        }
+
+        .mc-btn { 
+            background:#c6c6c6; border:3px solid #000; border-top-color:#fff; 
+            border-left-color:#fff; border-bottom-color:#555; border-right-color:#555; 
+            padding:10px 20px; width:320px; font-size:24px; cursor:pointer; 
+            font-family:'VT323'; margin:5px; text-transform: uppercase;
+        }
+        .mc-btn:hover:not(:disabled) { background:#6888d8; color:white; }
+        .mc-btn:disabled { color:#888; cursor:not-allowed; }
+
+        .overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:100; }
+        .title { font-size:90px; text-shadow:5px 5px #000; margin-bottom:40px; color:#fff; }
+        #debug-hud { position:absolute; top:10px; left:10px; z-index:200; pointer-events:none; text-shadow:2px 2px #000; font-size: 20px; }
+        #crosshair { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:30px; display:none; mix-blend-mode:difference; z-index: 150; }
+        .hidden { display:none !important; }
+    </style>
+    <script>
+        window.engineData = { yaw:0, pitch:0, keys:{}, isLocked:false, activeTexture:null, state:'VAULT' };
+        
+        window.onkeydown = (e) => window.engineData.keys[e.code] = true;
+        window.onkeyup = (e) => window.engineData.keys[e.code] = false;
+
+        const dbName = "MiddlandersVHD";
+        let vhd;
+
+        window.onload = () => {
+            // Version 6 to force a clean structure
+            const req = indexedDB.open(dbName, 6);
+            
+            req.onupgradeneeded = (e) => {
+                let db = e.target.result;
+                if (!db.objectStoreNames.contains('files')) {
+                    db.createObjectStore('files', { keyPath: 'filename' });
+                }
+                if (!db.objectStoreNames.contains('worlds')) {
+                    db.createObjectStore('worlds', { keyPath: 'worldName' });
+                }
+            };
+
+            req.onsuccess = (e) => { 
+                vhd = e.target.result; 
+                checkVHD(); 
+            };
+        };
+
+        function checkVHD() {
+            if(!vhd) return;
+            vhd.transaction(['files'], 'readonly').objectStore('files').count().onsuccess = (e) => {
+                const count = e.target.result;
+                document.getElementById('status').innerText = count > 0 ? `Assets Loaded: ${count}` : "VHD Empty. Upload required.";
+                document.getElementById('mountBtn').disabled = (count === 0);
+            };
+        }
+
+        // --- STABLE ASYNC UPLOAD ---
+        function handleUpload(event) {
+            const files = Array.from(event.target.files).filter(f => f.name.endsWith('.png') || f.name.endsWith('.json'));
+            if(files.length === 0) return;
+
+            let processed = 0;
+            document.getElementById('status').innerText = `Syncing: 0 / ${files.length}`;
+
+            files.forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    // Start a fresh transaction for every file to avoid "Transaction Inactive" errors
+                    const transaction = vhd.transaction(['files'], 'readwrite');
+                    const store = transaction.objectStore('files');
+                    
+                    const request = store.put({ 
+                        filename: file.webkitRelativePath || file.name, 
+                        data: e.target.result 
+                    });
+
+                    request.onsuccess = () => {
+                        processed++;
+                        document.getElementById('status').innerText = `Syncing: ${processed} / ${files.length}`;
+                        if(processed === files.length) { 
+                            alert("VHD Sync Complete!");
+                            checkVHD(); 
+                        }
+                    };
+                };
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        function mountEngine() {
+            document.getElementById('vault-ui').classList.add('hidden');
+            document.getElementById('main-menu').classList.remove('hidden');
+            
+            const store = vhd.transaction(['files'],'readonly').objectStore('files');
+            store.getAll().onsuccess = (ev) => {
+                let files = ev.target.result;
+                let textureFile = files.find(f => f.filename.includes('grass_block_top')) || 
+                                  files.find(f => f.filename.includes('dirt')) || 
+                                  files.find(f => f.filename.endsWith('.png'));
+                
+                if(textureFile) {
+                    const img = new Image();
+                    img.onload = () => { window.engineData.activeTexture = img; bootJava(); };
+                    img.src = URL.createObjectURL(new Blob([textureFile.data]));
+                } else { bootJava(); }
+            };
+        }
+
+        function bootJava() {
+            if(typeof main !== 'undefined') {
+                main();
+                setupMouseLock();
+            } else {
+                alert("CRITICAL ERROR: 'classes.js' was not found or is empty. Run the build command in terminal!");
+            }
+        }
+
+        function startWorld() {
+            window.engineData.state = 'PLAYING';
+            document.getElementById('main-menu').classList.add('hidden');
+            document.getElementById('pause-menu').classList.add('hidden');
+            document.getElementById('crosshair').style.display = 'block';
+            document.getElementById('game_frame').requestPointerLock();
+        }
+
+        function setupMouseLock() {
+            const frame = document.getElementById('game_frame');
+            frame.addEventListener('click', () => { if (window.engineData.state === 'PLAYING') frame.requestPointerLock(); });
+
+            document.addEventListener('pointerlockchange', () => {
+                window.engineData.isLocked = (document.pointerLockElement !== null);
+                if(!window.engineData.isLocked && window.engineData.state === 'PLAYING') {
+                    window.engineData.state = 'PAUSED';
+                    document.getElementById('pause-menu').classList.remove('hidden');
+                    document.getElementById('crosshair').style.display = 'none';
+                }
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if(window.engineData.isLocked) {
+                    window.engineData.yaw += e.movementX * 0.003;
+                    window.engineData.pitch += e.movementY * 0.003;
+                    window.engineData.pitch = Math.max(-1.5, Math.min(1.5, window.engineData.pitch));
+                }
+            });
+        }
+
+        window.nukeVHD = function() {
+            if(confirm("Delete all assets and restart?")) {
+                indexedDB.deleteDatabase(dbName);
+                location.reload();
+            }
+        };
+    </script>
+</head>
+<body>
+    <div id="vault-ui" class="overlay mc-dirt">
+        <div class="title">THE VAULT</div>
+        <div id="status" style="margin-bottom:20px; font-size:24px;">Initializing...</div>
+        <input type="file" id="folderInput" webkitdirectory directory multiple hidden onchange="handleUpload(event)">
+        <button class="mc-btn" onclick="document.getElementById('folderInput').click()">Upload assets folder</button>
+        <button id="mountBtn" class="mc-btn" onclick="mountEngine()" disabled>Mount Engine</button>
+        <button class="mc-btn" onclick="nukeVHD()" style="width: 150px; font-size: 14px; margin-top: 30px; background: #441111; color: #ff5555; border-color:#000;">Nuke DB</button>
+    </div>
+
+    <div id="main-menu" class="overlay mc-dirt hidden">
+        <div class="title" style="color: #ffaa00;">MIDDLANDERS</div>
+        <button class="mc-btn" onclick="startWorld()">Singleplayer</button>
+        <button class="mc-btn" disabled>Multiplayer</button>
+        <button class="mc-btn" onclick="location.reload()">Quit to Vault</button>
+    </div>
+
+    <div id="pause-menu" class="overlay hidden" style="background:rgba(0,0,0,0.8);">
+        <div class="title" style="font-size:60px;">Game Paused</div>
+        <button class="mc-btn" onclick="startWorld()">Back to Game</button>
+        <button class="mc-btn" onclick="location.reload()">Quit to Title</button>
+    </div>
+
+    <div id="debug-hud">XYZ: <span id="xyz">0/0/0</span></div>
+    <div id="crosshair">+</div>
+    <div id="game_frame" style="width:100vw; height:100vh;"></div>
+
+    <script src="js/classes.js"></script>
+</body>
+</html>
